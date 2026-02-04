@@ -108,3 +108,18 @@ body{
 @media (prefers-reduced-motion: reduce){
     *{transition:none!important}
 }
+
+.profile-img{
+    width:260px;
+    height:260px;
+    object-fit:cover;
+    border-radius:50%;
+    box-shadow:0 10px 30px rgba(0,0,0,0.15);
+}
+.profile-img-small{
+    width:120px;
+    height:120px;
+    object-fit:cover;
+    border-radius:50%;
+    box-shadow:0 8px 20px rgba(0,0,0,0.1);
+}
