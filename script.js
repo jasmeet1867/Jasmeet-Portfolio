@@ -19,6 +19,28 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
+  // Copy external profile links (prevents navigation)
+  document.querySelectorAll('a[data-copy]').forEach(link => {
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const url = link.getAttribute('href') || '';
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        link.classList.add('copied');
+        const oldText = link.textContent;
+        link.textContent = 'Copied to clipboard';
+        setTimeout(() => {
+          link.textContent = oldText;
+          link.classList.remove('copied');
+        }, 1100);
+      } catch {
+        // If clipboard is blocked, allow normal navigation
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    });
+  });
+
   // Reveal on scroll
   const reveals = document.querySelectorAll('.reveal');
   if ('IntersectionObserver' in window && reveals.length) {
