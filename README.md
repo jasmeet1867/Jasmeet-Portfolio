@@ -16,7 +16,8 @@ After editing, save the files and refresh the browser. A local live-reload exten
 
 - Added Magna International / Cosma IT co-op experience, including Windows support, patch compliance, AD / Entra ID, Intune, application support, and documentation.
 - Refreshed all four pages with a shared responsive layout, clearer content hierarchy, and working social and email links.
-- Added an animated perspective tunnel, scroll reveals, subtle pointer tilt, reading progress, and page transitions with a local-file fallback.
+- Replaced the hero tunnel with a live network map of the real stack (Software, Systems, People hubs with packets moving between tools; hover a tool to trace its connections, tap on phones),
+- Added scroll reveals, subtle pointer tilt, reading progress, and page transitions with a local-file fallback.
 - Added a motion pause control, device reduced-motion support, and animation suspension when the tunnel is offscreen or the tab is hidden.
 - Retained the existing photograph, project information, professional history, and credentials from the original repository.
 

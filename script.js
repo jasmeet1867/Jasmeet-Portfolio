@@ -67,6 +67,35 @@
     window.matchMedia('(max-width: 720px)').addEventListener('change', () => closeNav());
   }
 
+
+  // Scroll spy: mark the nav link for the section in view and slide the dot under it.
+  const navLinks = nav ? [...nav.querySelectorAll('a[href^="#"]')] : [];
+  const navDot = document.querySelector('.nav-dot');
+  const spySections = navLinks
+    .map(a => ({ link: a, target: a.getAttribute('href') === '#top' ? null : document.querySelector(a.getAttribute('href')) }))
+    .filter(s => s.target || s.link.getAttribute('href') === '#top');
+  let activeLink = null;
+  function placeDot() {
+    if (!navDot || !activeLink) return;
+    const x = activeLink.offsetLeft + activeLink.offsetWidth / 2 - navDot.offsetWidth / 2;
+    navDot.style.setProperty('--dot-x', `${x}px`);
+    navDot.style.bottom = `${nav.offsetHeight / 2 - activeLink.offsetHeight / 2 - 10}px`;
+    navDot.classList.add('is-ready');
+  }
+  function updateSpy() {
+    if (!spySections.length) return;
+    const line = window.innerHeight * 0.35;
+    let current = spySections[0];
+    spySections.forEach(s => { if (s.target && s.target.getBoundingClientRect().top <= line) current = s; });
+    // At the very bottom the last section is always the active one.
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) current = spySections[spySections.length - 1];
+    if (current.link === activeLink) return;
+    activeLink = current.link;
+    navLinks.forEach(a => a.removeAttribute('aria-current'));
+    activeLink.setAttribute('aria-current', 'true');
+    placeDot();
+  }
+
   function initReveals() {
     if (isPaused || !('IntersectionObserver' in window)) return;
     const elements = document.querySelectorAll('.reveal');
@@ -97,6 +126,7 @@
       portal.style.removeProperty('--portal-y');
       portal.style.removeProperty('--portal-scale');
     }
+    updateSpy();
     scrollScheduled = false;
   }
   window.addEventListener('scroll', () => {
@@ -104,7 +134,7 @@
     scrollScheduled = true;
     requestAnimationFrame(onScroll);
   }, { passive: true });
-  window.addEventListener('resize', () => { onScroll(); if (tunnel) tunnel.resize(); }, { passive: true });
+  window.addEventListener('resize', () => { onScroll(); placeDot(); if (tunnel) tunnel.resize(); }, { passive: true });
 
   document.querySelectorAll('[data-tilt]').forEach(card => {
     let rect;
@@ -150,109 +180,159 @@
   window.addEventListener('pageshow', () => { navigating = false; document.body.classList.remove('is-leaving'); });
   document.querySelectorAll('[data-year]').forEach(el => { el.textContent = new Date().getFullYear(); });
 
+  // Live network map of the real stack: Software, Systems and People hubs with packets moving between tools.
   function createTunnel(target) {
     let ctx;
     try { ctx = target.getContext('2d', { alpha: true }); } catch (_) { return null; }
     if (!ctx) return null;
-    let width = 0, height = 0, dpr = 1, frame = 0, last = 0, time = 0;
-    let paused = isPaused, visible = true;
-    const coarse = window.matchMedia('(pointer: coarse)').matches;
-    const particles = Array.from({ length: coarse ? 60 : 105 }, (_, i) => {
-      // Deterministic points keep the composition steady between pages and refreshes.
-      const rand = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
-      return { a: rand(i + 2) * Math.PI * 2, r: 230 + rand(i + 9) * 560, z: rand(i + 17) * 1800, s: .4 + rand(i + 25) * .9 };
+    const COLORS = { software: [65, 105, 198], systems: [8, 127, 101], people: [196, 128, 44] };
+    const HUBS = [
+      { id: 'software', label: 'Software', x: .24, y: .4 },
+      { id: 'systems', label: 'Systems', x: .72, y: .3 },
+      { id: 'people', label: 'People', x: .5, y: .8 },
+    ];
+    const SATS = {
+      software: [['Python', -.15, -.16], ['C#', .03, -.2], ['React', -.2, .03], ['TypeScript', -.13, .2], ['ASP.NET Core', .09, .19], ['SQL', .17, -.06], ['Git', -.04, -.33]],
+      systems: [['Windows', .17, .1], ['Intune', .06, .22], ['Entra ID', -.12, -.15], ['Active Directory', .03, -.24], ['Linux', -.16, .1], ['Networking', .2, -.1], ['Microsoft 365', .21, .28]],
+      people: [['Scrum', -.18, .03], ['Help desk', .17, .02], ['Documentation', -.05, .15], ['English / French', .12, .14]],
+    };
+    const CROSS = [['SQL', 'Linux'], ['Git', 'Entra ID'], ['Microsoft 365', 'Help desk'], ['Networking', 'Windows'],
+      ['Scrum', 'TypeScript'], ['Documentation', 'ASP.NET Core'], ['Intune', 'Windows'], ['Linux', 'Help desk']];
+    const nodes = [], byLabel = {}, edges = [], packets = [];
+    HUBS.forEach(h => {
+      const hub = { label: h.label, hub: true, group: h.id, hx: h.x, hy: h.y, ph: h.x * 5 };
+      nodes.push(hub); byLabel[h.label] = hub;
+      SATS[h.id].forEach(([label, dx, dy], i) => {
+        const n = { label, group: h.id, hub: false, hx: h.x + dx, hy: h.y + dy, ph: i * 1.7 + h.x * 3, left: dx < -.02 };
+        nodes.push(n); byLabel[label] = n;
+        edges.push([hub, n]);
+      });
     });
+    edges.push([byLabel.Software, byLabel.Systems], [byLabel.Systems, byLabel.People], [byLabel.People, byLabel.Software]);
+    CROSS.forEach(([a, b]) => edges.push([byLabel[a], byLabel[b]]));
+    nodes.forEach(n => { n.nb = new Set(); });
+    edges.forEach(([a, b]) => { a.nb.add(b); b.nb.add(a); });
+
+    let W = 0, H = 0, dpr = 1, frame = 0, last = 0, time = 0, small = false;
+    let paused = isPaused, visible = true, hover = null;
+    let pointer = { x: -1e4, y: -1e4, on: false };
+    const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
     function resize() {
       const r = target.getBoundingClientRect();
-      width = Math.max(1, r.width); height = Math.max(1, r.height); dpr = Math.min(window.devicePixelRatio || 1, 1.75);
-      target.width = Math.round(width * dpr); target.height = Math.round(height * dpr);
+      W = Math.max(1, target.offsetWidth || r.width); H = Math.max(1, target.offsetHeight || r.height);
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      target.width = Math.round(W * dpr); target.height = Math.round(H * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      draw();
+      small = window.innerWidth <= 720;
+      // The canvas runs partly under the headline and off the right edge, so the map sits in its visible middle.
+      const region = small ? { x: W * .16, y: H * .16, w: W * .66, h: H * .68 } : { x: W * .38, y: H * .2, w: W * .4, h: H * .6 };
+      nodes.forEach(n => {
+        n.tx = region.x + n.hx * region.w; n.ty = region.y + n.hy * region.h;
+        if (n.x == null) { n.x = n.tx; n.y = n.ty; n.vx = 0; n.vy = 0; }
+      });
+      if (!frame) { settle(); draw(); }
     }
-    function project(x, y, z) {
-      const p = 580 / z;
-      const unit = Math.min(width / 950, height / 900);
-      return [width * .53 + x * p * unit, height * .49 + y * p * unit];
-    }
-    function ringPoint(angle, z, twist) {
-      const radius = 253;
-      const x = Math.cos(angle) * radius;
-      const y = Math.sin(angle) * radius * .93;
-      const px = x * Math.cos(twist) - y * Math.sin(twist);
-      const py = x * Math.sin(twist) + y * Math.cos(twist);
-      return project(px, py, z + Math.sin(angle) * 35 + Math.cos(angle) * 28);
-    }
-    function draw() {
-      ctx.clearRect(0, 0, width, height);
-      const travel = time * 49;
-      const rings = Array.from({ length: 17 }, (_, i) => 145 + ((i * 112 - travel) % 1904 + 1904) % 1904).sort((a, b) => b - a);
-      // Fine radial guides add depth without competing with the headline.
-      for (let s = 0; s < 10; s++) {
-        const angle = s / 10 * Math.PI * 2 + .12;
-        ctx.beginPath();
-        const far = ringPoint(angle, 2060, .1);
-        const near = ringPoint(angle, 140, -.1);
-        ctx.moveTo(...far); ctx.lineTo(...near);
-        ctx.strokeStyle = 'rgba(110,153,232,.045)'; ctx.lineWidth = .6; ctx.stroke();
+    function settle() { for (let i = 0; i < 90; i++) step(1 / 60, true); }
+
+    function step(dt, quiet) {
+      nodes.forEach(n => {
+        const still = paused || quiet;
+        const dx0 = still ? 0 : Math.sin(time * .5 + n.ph) * (n.hub ? 2 : 5);
+        const dy0 = still ? 0 : Math.cos(time * .4 + n.ph * 1.3) * (n.hub ? 2 : 5);
+        let fx = (n.tx + dx0 - n.x) * 18, fy = (n.ty + dy0 - n.y) * 18;
+        if (pointer.on && !small && !paused) {
+          const dx = n.x - pointer.x, dy = n.y - pointer.y, d2 = dx * dx + dy * dy, R = 150;
+          if (d2 < R * R && d2 > 1) { const d = Math.sqrt(d2), k = (1 - d / R) * 900; fx += dx / d * k; fy += dy / d * k; }
+        }
+        n.vx = (n.vx + fx * dt) * Math.pow(.02, dt);
+        n.vy = (n.vy + fy * dt) * Math.pow(.02, dt);
+        n.x += n.vx * dt; n.y += n.vy * dt;
+      });
+      if (paused || quiet) return;
+      if (Math.random() < dt * (small ? 4 : 7)) {
+        const e = edges[(Math.random() * edges.length) | 0], flip = Math.random() < .5;
+        packets.push({ a: flip ? e[1] : e[0], b: flip ? e[0] : e[1], t: 0, speed: .5 + Math.random() * .6 });
       }
-      rings.forEach(z => {
-        const fade = Math.min(1, (z - 145) / 200) * Math.min(1, (2050 - z) / 500);
-        const twist = Math.sin(z / 950 + time * .07) * .12 - .26;
-        const alpha = (0.07 + (1 - z / 2200) * .28) * fade;
-        const gradient = ctx.createLinearGradient(width * .25, height * .2, width * .8, height * .8);
-        gradient.addColorStop(0, `rgba(118,157,255,${alpha * .45})`);
-        gradient.addColorStop(.45, `rgba(111,158,255,${alpha})`);
-        gradient.addColorStop(.75, `rgba(160,240,214,${alpha * .8})`);
-        gradient.addColorStop(1, `rgba(78,118,223,${alpha * .2})`);
-        ctx.beginPath();
-        for (let n = 0; n <= 100; n++) {
-          const a = n / 100 * Math.PI * 2;
-          const point = ringPoint(a, z, twist);
-          if (!n) ctx.moveTo(...point); else ctx.lineTo(...point);
-        }
-        ctx.closePath(); ctx.strokeStyle = gradient; ctx.lineWidth = z < 500 ? 1.2 : .8; ctx.stroke();
-        // A short moving highlight makes each frame read as a ring rather than a flat grid.
-        const start = -.9 + time * .08 + z / 1500;
-        ctx.beginPath();
-        for (let n = 0; n <= 22; n++) {
-          const a = start + n / 22 * .27;
-          const point = ringPoint(a, z, twist);
-          if (!n) ctx.moveTo(...point); else ctx.lineTo(...point);
-        }
-        ctx.strokeStyle = `rgba(169,211,249,${alpha * 1.4})`; ctx.lineWidth = 1.3; ctx.stroke();
+      for (let i = packets.length - 1; i >= 0; i--) { packets[i].t += dt * packets[i].speed; if (packets[i].t >= 1) packets.splice(i, 1); }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      const lit = hover ? new Set([hover, ...hover.nb]) : null;
+      edges.forEach(([a, b]) => {
+        const on = lit && (a === hover || b === hover);
+        const hubEdge = a.hub && b.hub;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = on ? rgba(COLORS[hover.group], .8) : `rgba(35,67,55,${lit ? .05 : hubEdge ? .26 : .14})`;
+        ctx.lineWidth = on ? 1.6 : hubEdge ? 1.2 : 1; ctx.stroke();
       });
-      particles.forEach(p => {
-        const z = 130 + ((p.z - travel * .7) % 1900 + 1900) % 1900;
-        const x = Math.cos(p.a) * p.r, y = Math.sin(p.a) * p.r * .8;
-        const [sx, sy] = project(x, y, z);
-        if (sx < 0 || sx > width || sy < 0 || sy > height) return;
-        const alpha = Math.min(.6, (1 - z / 2200) * .6);
-        ctx.fillStyle = `rgba(157,188,227,${alpha})`;
-        ctx.beginPath(); ctx.arc(sx, sy, Math.min(1.6, p.s * 400 / z), 0, Math.PI * 2); ctx.fill();
+      packets.forEach(p => {
+        const x = p.a.x + (p.b.x - p.a.x) * p.t, y = p.a.y + (p.b.y - p.a.y) * p.t;
+        const tt = Math.max(0, p.t - .2), tx = p.a.x + (p.b.x - p.a.x) * tt, ty = p.a.y + (p.b.y - p.a.y) * tt;
+        const c = COLORS[p.a.group], fade = Math.sin(p.t * Math.PI);
+        const g = ctx.createLinearGradient(tx, ty, x, y);
+        g.addColorStop(0, rgba(c, 0)); g.addColorStop(1, rgba(c, fade));
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.strokeStyle = g; ctx.lineWidth = 2.4; ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fillStyle = rgba(c, fade); ctx.fill();
+      });
+      nodes.forEach(n => {
+        const c = COLORS[n.group], dim = lit && !lit.has(n), isHover = n === hover;
+        if (n.hub) {
+          const r = small ? 7 : 9;
+          const pulse = paused ? 0 : (Math.sin(time * 1.6 + n.hx * 9) + 1) * 4;
+          ctx.beginPath(); ctx.arc(n.x, n.y, r + 10 + pulse, 0, Math.PI * 2); ctx.fillStyle = rgba(c, dim ? .03 : .12); ctx.fill();
+          ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fillStyle = rgba(c, dim ? .3 : 1); ctx.fill();
+          ctx.font = `700 ${small ? 10 : 11}px "Courier New", monospace`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = dim ? 'rgba(23,35,31,.3)' : '#17231f';
+          ctx.fillText(n.label.toUpperCase(), n.x, n.y - r - (small ? 10 : 14));
+        } else {
+          const r = isHover ? 5 : 3.4;
+          ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fillStyle = rgba(c, dim ? .25 : isHover ? 1 : .85); ctx.fill();
+          if (isHover) { ctx.beginPath(); ctx.arc(n.x, n.y, 11, 0, Math.PI * 2); ctx.strokeStyle = rgba(c, .5); ctx.lineWidth = 1; ctx.stroke(); }
+          ctx.font = `${isHover ? 700 : 400} ${small ? 11 : 13}px Arial, Helvetica, sans-serif`;
+          ctx.textAlign = n.left ? 'right' : 'left';
+          ctx.fillStyle = dim ? 'rgba(82,100,93,.3)' : lit ? '#17231f' : '#52645d';
+          // On phones, tool names appear when their part of the map is tapped.
+          if (!small || (lit && !dim)) ctx.fillText(n.label, n.x + (n.left ? -9 : 9), n.y + 4);
+        }
       });
     }
+
     function tick(now) {
       frame = 0;
       if (paused || !visible || document.hidden) { last = 0; return; }
-      const delta = last ? Math.min((now - last) / 1000, .05) : 0;
-      time += delta; last = now;
-      draw(); frame = requestAnimationFrame(tick);
+      const dt = last ? Math.min((now - last) / 1000, .05) : .016;
+      time += dt; last = now;
+      step(dt); draw(); frame = requestAnimationFrame(tick);
     }
-    function resume() {
-      if (!frame && !paused && visible && !document.hidden) { last = 0; frame = requestAnimationFrame(tick); }
-    }
+    function resume() { if (!frame && !paused && visible && !document.hidden) { last = 0; frame = requestAnimationFrame(tick); } }
     function setPaused(value) {
       paused = value;
       if (paused && frame) { cancelAnimationFrame(frame); frame = 0; last = 0; }
+      if (paused) { settle(); }
       draw(); resume();
     }
+    // The canvas sits behind the hero text, so pointer input is read from the whole hero.
+    const area = target.closest('.hero') || target;
+    const locate = e => {
+      const r = target.getBoundingClientRect();
+      const sx = W / r.width, sy = H / r.height; // undo the scroll parallax scale
+      pointer = { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy, on: e.pointerType === 'mouse' };
+      let best = null, bd = 28 * 28;
+      nodes.forEach(n => { const d = (n.x - pointer.x) ** 2 + (n.y - pointer.y) ** 2; if (d < bd) { bd = d; best = n; } });
+      if (best !== hover) { hover = best; if (!frame) draw(); }
+    };
+    area.addEventListener('pointermove', locate);
+    area.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse' && !e.target.closest('a, button')) locate(e); });
+    area.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { pointer.on = false; hover = null; if (!frame) draw(); } });
     if ('IntersectionObserver' in window) {
-      const observer = new IntersectionObserver(entries => {
+      new IntersectionObserver(entries => {
         visible = entries[0].isIntersecting;
         if (!visible && frame) { cancelAnimationFrame(frame); frame = 0; last = 0; }
         resume();
-      }, { threshold: 0 });
-      observer.observe(target);
+      }, { threshold: 0 }).observe(target);
     }
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && frame) { cancelAnimationFrame(frame); frame = 0; last = 0; }
@@ -264,5 +344,6 @@
 
   updateMotion();
   initReveals();
+  if (document.fonts) document.fonts.ready.then(placeDot);
   if (canvas) tunnel = createTunnel(canvas);
 })();
